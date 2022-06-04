@@ -1,5 +1,5 @@
-import os, uvicorn, aiohttp
-from typing import Optional, Tuple
+import os, uvicorn, aiohttp, asyncio  # , ratelimitqueue
+from typing import Any, Optional, Tuple
 from pydantic import BaseModel
 from fastapi import FastAPI, Response
 from rich.console import Console
@@ -8,6 +8,7 @@ from rich.console import Console
 
 app = FastAPI()
 console = Console()
+# request_queue = ratelimitqueue.RateLimitQueue(calls=10, per=1)
 
 # --- Events --- #
 
@@ -30,7 +31,9 @@ class Player(BaseModel):
     name: str
 
 
-async def get_uuid(username: str) -> dict[str, bool | str | None]:
+async def get_uuid(
+    username: str, rerunning: bool = False
+) -> dict[str, bool | str | None]:
     """Returns the UUID of a player provided it's a premium player."""
     to_return = {"status": None, "uuid": None, "username": username}
     url = "https://api.mojang.com/users/profiles/minecraft/{}"
@@ -45,12 +48,20 @@ async def get_uuid(username: str) -> dict[str, bool | str | None]:
                 to_return["username"] = data["name"]
                 to_return["uuid"] = data["id"]
                 return to_return
+            elif response.status == 429:
+                to_return["status"] = False
+                if not rerunning:
+                    return to_return
+                # prevents query from being retried more than twice
+
+                await asyncio.sleep(0.5)
+                return await get_uuid(username, rerunning=True)
 
             to_return["status"] = False
             return to_return
 
 
-async def check_if_server_premium(players: list[dict[str, str]]) -> Tuple[bool, str | None]:  # type: ignore
+async def check_if_server_premium(players: list[dict[str, str]]) -> Tuple[bool, str | None, list]:  # type: ignore
     """Given a dictionary of usernames to UUIDs, the function returns a boolean or Nonetype of whether or not the server is cracked based on whether or not the UUIDs match with the ones in mojang. To match with function name, response reversed.
 
     True, None: Server is premium
@@ -71,38 +82,40 @@ async def check_if_server_premium(players: list[dict[str, str]]) -> Tuple[bool, 
 
         # If username length doesn't match allowed length
         if len(username) > max_length:
-            return False, "length"
+            return False, "length", players
         elif len(username) < min_length:
-            return False, "length"
+            return False, "length", players
 
         # If any non allowed characters are used
         elif len(
             [True for letter in set(username.lower()) if letter in allowed_letters]
         ) != len(set(username.lower())):
-            return False, "characters"
+            return False, "characters", players
         data = await get_uuid(username)
 
         # If getting the UUID fails, which can happen if theres no account with the username provided
         if data["status"] == False:
-            return False, "failed"
+            return False, "failed", players
 
         # If the UUID is different
         found_uuid = data["uuid"]
         if player["uuid"] != found_uuid:
-            return False, "different_uuid"
+            return False, "different_uuid", players
 
-        return True, None
+        return True, None, players
 
 
 class Resp(BaseModel):
     status: bool
     message: Optional[str]
     premium: Optional[bool]
-    reason: Optional[str]
+    reasons: Optional[
+        list[dict[str, str | bool | None | list[dict[str, dict[str, bool | None]]]]]
+    ]
 
 
 @app.post("/check_server", response_model=Resp)
-async def check_server(players: list[Player]) -> Response | Resp:
+async def check_server(players: list[Player]) -> Response | dict[str, bool]:
     # fmt: off
     """
     ## Checks if a server is premium, returns a dictionary.
@@ -138,7 +151,14 @@ async def check_server(players: list[Player]) -> Response | Resp:
             // Output
             {
                 "status": true,
+                "message": null,
                 "premium": true,
+                "reasons": [{
+                    "thinkofdeath": {
+                        "premium": true,
+                        "reason": null
+                    }
+                }]
             }
 
     """
@@ -158,10 +178,20 @@ async def check_server(players: list[Player]) -> Response | Resp:
         {"username": player["name"], "uuid": player["id"].replace("-", "")}
         for player in data
     ]
-    premium, reason = await check_if_server_premium(to_check)
-    to_return = {"status": True, "premium": premium}
-    if not premium:
-        to_return["reason"] = reason  # type: ignore
+    to_check_2d = [[data] for data in to_check]
+    gathered = await asyncio.gather(
+        *[check_if_server_premium(to_check_q) for to_check_q in to_check_2d]
+    )
+    premium = not False in [
+        g[0] for g in gathered if g[0]
+    ]  # better ways to implement yes
+    to_return = {
+        "status": True,
+        "premium": premium,
+        "reasons": [
+            {g[2][0]["username"]: {"premium": g[0], "reason": g[1]}} for g in gathered
+        ],
+    }
 
     return to_return
 

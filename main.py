@@ -1,4 +1,5 @@
 import os, uvicorn, aiohttp
+from typing import Optional, Tuple
 from pydantic import BaseModel
 from fastapi import FastAPI, Response
 from rich.console import Console
@@ -49,11 +50,11 @@ async def get_uuid(username: str) -> dict[str, bool | str | None]:
             return to_return
 
 
-async def check_if_server_premium(players: list[dict[str, str]]) -> bool:  # type: ignore
+async def check_if_server_premium(players: list[dict[str, str]]) -> Tuple[bool, str | None]:  # type: ignore
     """Given a dictionary of usernames to UUIDs, the function returns a boolean or Nonetype of whether or not the server is cracked based on whether or not the UUIDs match with the ones in mojang. To match with function name, response reversed.
 
-    True: Server is premium
-    False: Server is cracked
+    True, None: Server is premium
+    False, Reason: Server is cracked
     """
     allowed_letters = "abcdefghijklmnopqrstuvwxyz0123456789_"
     min_length = 3
@@ -70,31 +71,38 @@ async def check_if_server_premium(players: list[dict[str, str]]) -> bool:  # typ
 
         # If username length doesn't match allowed length
         if len(username) > max_length:
-            return False
+            return False, "length"
         elif len(username) < min_length:
-            return False
+            return False, "length"
 
         # If any non allowed characters are used
         elif len(
             [True for letter in set(username.lower()) if letter in allowed_letters]
         ) != len(set(username.lower())):
-            return False
+            return False, "characters"
         data = await get_uuid(username)
 
         # If getting the UUID fails, which can happen if theres no account with the username provided
         if data["status"] == False:
-            return False
+            return False, "failed"
 
         # If the UUID is different
         found_uuid = data["uuid"]
         if player["uuid"] != found_uuid:
-            return False
+            return False, "different_uuid"
 
-        return True
+        return True, None
 
 
-@app.post("/check_server")
-async def check_server(players: list[Player]) -> Response | dict[str, bool]:
+class Resp(BaseModel):
+    status: bool
+    message: Optional[str]
+    premium: Optional[bool]
+    reason: Optional[str]
+
+
+@app.post("/check_server", response_model=Resp)
+async def check_server(players: list[Player]) -> Response | Resp:
     # fmt: off
     """
     ## Checks if a server is premium, returns a dictionary.
@@ -130,7 +138,7 @@ async def check_server(players: list[Player]) -> Response | dict[str, bool]:
             // Output
             {
                 "status": true,
-                "premium": true
+                "premium": true,
             }
 
     """
@@ -150,8 +158,11 @@ async def check_server(players: list[Player]) -> Response | dict[str, bool]:
         {"username": player["name"], "uuid": player["id"].replace("-", "")}
         for player in data
     ]
-    premium: bool = await check_if_server_premium(to_check)
+    premium, reason = await check_if_server_premium(to_check)
     to_return = {"status": True, "premium": premium}
+    if not premium:
+        to_return["reason"] = reason  # type: ignore
+
     return to_return
 
 

@@ -16,6 +16,7 @@ console = Console()
 @app.on_event("startup")
 async def startup():
     console.log("[API] Starting...")
+    console.rule("You can visit API documentation at http://localhost/redoc")
 
 
 @app.on_event("shutdown")
@@ -186,11 +187,14 @@ async def check_server(players: list[Player]) -> Response | dict[str, bool]:
             {g[2][0]["username"]: {"premium": g[0], "reason": g[1]}} for g in gathered
         ],
     }
-    reason_bools = [bruh['premium'] for bruh in [list(reason.values())[0] for reason in to_return['reasons']]]
+    reason_bools = [
+        bruh["premium"]
+        for bruh in [list(reason.values())[0] for reason in to_return["reasons"]]
+    ]
     if False in reason_bools:
-        to_return['premium'] = False
+        to_return["premium"] = False
     else:
-        to_return['premium'] = True
+        to_return["premium"] = True
     return to_return
 
 
@@ -198,8 +202,5 @@ async def check_server(players: list[Player]) -> Response | dict[str, bool]:
 
 if __name__ == "__main__":
     uvicorn.run(
-        f"{os.path.basename(__file__).replace('.py', '')}:app",
-        host="0.0.0.0",
-        port=80,
-        reload=True,
+        f"{os.path.basename(__file__).replace('.py', '')}:app", host="0.0.0.0", port=80
     )

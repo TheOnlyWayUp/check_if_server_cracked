@@ -109,9 +109,7 @@ class Resp(BaseModel):
     status: bool
     message: Optional[str]
     premium: Optional[bool]
-    reasons: Optional[
-        list[dict[str, str | bool | None | list[dict[str, dict[str, bool | None]]]]]
-    ]
+    reasons: Optional[list[dict[str, dict[str, bool | str | None]]]]
 
 
 @app.post("/check_server", response_model=Resp)
@@ -182,17 +180,17 @@ async def check_server(players: list[Player]) -> Response | dict[str, bool]:
     gathered = await asyncio.gather(
         *[check_if_server_premium(to_check_q) for to_check_q in to_check_2d]
     )
-    premium = not False in [
-        g[0] for g in gathered if g[0]
-    ]  # better ways to implement yes
     to_return = {
         "status": True,
-        "premium": premium,
         "reasons": [
             {g[2][0]["username"]: {"premium": g[0], "reason": g[1]}} for g in gathered
         ],
     }
-
+    reason_bools = [bruh['premium'] for bruh in [list(reason.values())[0] for reason in to_return['reasons']]]
+    if False in reason_bools:
+        to_return['premium'] = False
+    else:
+        to_return['premium'] = True
     return to_return
 
 
